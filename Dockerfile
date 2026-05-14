@@ -44,6 +44,9 @@ RUN if [ -d "frontend" ]; then \
     cd frontend && npm install --legacy-peer-deps && npm run build && cd ..; \
     fi
 
+# Give appuser write access to beat schedule directory
+RUN mkdir -p /var/celery && chown -R appuser:appgroup /var/celery
+
 USER appuser
 
 EXPOSE 8000
