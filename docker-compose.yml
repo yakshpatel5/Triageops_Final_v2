@@ -1,5 +1,3 @@
-version: "3.9"
-
 # TriageOps — local development stack
 # ─────────────────────────────────────
 # Quick start:
@@ -138,11 +136,9 @@ services:
       celery -A tasks.celery_app beat
       --loglevel=info
       --scheduler celery.beat:PersistentScheduler
-      --schedule /var/celery/beat-schedule
+      --schedule /tmp/beat-schedule
     environment:
       <<: *app-env
-    volumes:
-      - beat_schedule:/var/celery
     depends_on:
       postgres: { condition: service_healthy }
       redis:    { condition: service_healthy }
@@ -170,4 +166,4 @@ services:
 volumes:
   postgres_data:
   redis_data:
-  beat_schedule:
+  
