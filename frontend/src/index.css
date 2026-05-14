@@ -1,0 +1,38 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@200..800&family=Newsreader:ital,opsz,wght@0,6..72,200..800;1,6..72,200..800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Manrope', system-ui, sans-serif;
+  background: #EFEBE2;
+  color: #1A1A1A;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Anthropic-style scrollbar */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(26,26,26,0.12); border-radius: 99px; }
+
+/* Table base */
+table { border-collapse: collapse; width: 100%; }
+
+/* Smooth page transitions */
+* { transition-property: background-color, border-color, color;
+    transition-duration: 0.15s; transition-timing-function: ease; }
+
+/* Code blocks */
+code { font-family: 'JetBrains Mono', monospace; }
+
+/* Input focus ring */
+input:focus { 
+  outline: none;
+  border-color: #2A9D8F !important;
+  box-shadow: 0 0 0 3px rgba(42,157,143,0.12);
+}
+
+/* Pulse animation for live dot */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}

@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TriageOps NOC Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg:        #080c10;
+    --surface:   #0d1117;
+    --surface2:  #141b24;
+    --border:    #1e2d3d;
+    --text:      #c9d1d9;
+    --muted:     #58667a;
+    --accent:    #00d9ff;
+    --red:       #ff4757;
+    --orange:    #ff9f43;
+    --green:     #26de81;
+    --yellow:    #fed330;
+    --blue:      #4a90e2;
+    --font-mono: 'JetBrains Mono', monospace;
+    --font-head: 'Syne', sans-serif;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font-mono); }
+
+  /* ─── LAYOUT ─── */
+  #app { display: grid; grid-template-rows: 56px 1fr; height: 100vh; overflow: hidden; }
+  header {
+    display: flex; align-items: center; gap: 20px;
+    padding: 0 24px; border-bottom: 1px solid var(--border);
+    background: var(--surface); z-index: 10;
+  }
+  .logo { font-family: var(--font-head); font-weight: 800; font-size: 18px; color: var(--accent); letter-spacing: -0.5px; }
+  .logo span { color: var(--muted); font-weight: 400; }
+  .header-nav { display: flex; gap: 4px; margin-left: 32px; }
+  .nav-btn {
+    padding: 5px 14px; border-radius: 4px; border: 1px solid transparent;
+    background: transparent; color: var(--muted); font-family: var(--font-mono);
+    font-size: 12px; cursor: pointer; transition: all .15s;
+  }
+  .nav-btn:hover, .nav-btn.active { color: var(--text); border-color: var(--border); background: var(--surface2); }
+  .header-right { margin-left: auto; display: flex; align-items: center; gap: 16px; }
+  .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); animation: pulse 2s ease infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(.8)} }
+  .api-key-input {
+    background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+    font-family: var(--font-mono); font-size: 11px; padding: 5px 10px;
+    border-radius: 4px; width: 220px;
+  }
+  .api-key-input::placeholder { color: var(--muted); }
+  .btn-refresh {
+    padding: 5px 12px; background: var(--accent); color: var(--bg); border: none;
+    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+    border-radius: 4px; cursor: pointer; transition: opacity .15s;
+  }
+  .btn-refresh:hover { opacity: .85; }
+  .btn-refresh:disabled { opacity: .4; cursor: not-allowed; }
+
+  main { overflow: hidden; display: grid; }
+
+  /* ─── VIEWS ─── */
+  .view { display: none; height: 100%; overflow-y: auto; padding: 20px 24px; }
+  .view.active { display: block; }
+
+  /* ─── STAT CARDS ─── */
+  .stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .stat-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px 18px; position: relative; overflow: hidden;
+    animation: fadeUp .4s ease both;
+  }
+  .stat-card::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; background: var(--accent-color, var(--accent)); }
+  @keyframes fadeUp { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none} }
+  .stat-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+  .stat-value { font-family: var(--font-head); font-size: 32px; font-weight: 800; color: var(--text); line-height: 1; }
+  .stat-sub   { font-size: 10px; color: var(--muted); margin-top: 6px; }
+
+  /* ─── SECTION HEADER ─── */
+  .section-header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .section-title { font-family: var(--font-head); font-size: 13px; font-weight: 700; color: var(--text); text-transform: uppercase; letter-spacing: 1px; }
+  .section-count { font-size: 11px; color: var(--muted); background: var(--surface2); padding: 2px 8px; border-radius: 10px; }
+  .filter-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  .filter-btn {
+    padding: 4px 12px; border-radius: 3px; border: 1px solid var(--border);
+    background: transparent; color: var(--muted); font-family: var(--font-mono);
+    font-size: 11px; cursor: pointer; transition: all .15s;
+  }
+  .filter-btn.active { background: var(--surface2); color: var(--text); border-color: var(--accent); }
+
+  /* ─── TABLE ─── */
+  .table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  thead th {
+    padding: 10px 14px; text-align: left; font-size: 10px; text-transform: uppercase;
+    letter-spacing: 1px; color: var(--muted); border-bottom: 1px solid var(--border);
+    background: var(--surface2); font-weight: 600;
+  }
+  tbody tr { border-bottom: 1px solid var(--border); transition: background .1s; cursor: pointer; }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr:hover { background: var(--surface2); }
+  td { padding: 11px 14px; vertical-align: middle; }
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 3px;
+    font-size: 10px; font-weight: 600; letter-spacing: .5px;
+    text-transform: uppercase;
+  }
+  .badge-CRITICAL, .badge-critical   { background: rgba(255,71,87,.15); color: var(--red); border: 1px solid rgba(255,71,87,.3); }
+  .badge-HIGH                        { background: rgba(255,159,67,.15); color: var(--orange); border: 1px solid rgba(255,159,67,.3); }
+  .badge-MEDIUM                      { background: rgba(254,211,48,.12); color: var(--yellow); border: 1px solid rgba(254,211,48,.3); }
+  .badge-LOW, .badge-NOISE, .badge-noise { background: rgba(38,222,129,.1); color: var(--green); border: 1px solid rgba(38,222,129,.25); }
+  .badge-NEEDS_REVIEW, .badge-needs_review { background: rgba(0,217,255,.1); color: var(--accent); border: 1px solid rgba(0,217,255,.25); }
+  .badge-PENDING  { background: rgba(254,211,48,.12); color: var(--yellow); border: 1px solid rgba(254,211,48,.3); }
+  .badge-ACTIONED { background: rgba(38,222,129,.1); color: var(--green); border: 1px solid rgba(38,222,129,.25); }
+  .badge-EXPIRED  { background: rgba(88,102,122,.15); color: var(--muted); border: 1px solid var(--border); }
+  .badge-TRIGGERED { background: rgba(38,222,129,.1); color: var(--green); border: 1px solid rgba(38,222,129,.25); }
+  .badge-FAILED    { background: rgba(255,71,87,.15); color: var(--red); border: 1px solid rgba(255,71,87,.3); }
+  .badge-SKIPPED   { background: rgba(88,102,122,.15); color: var(--muted); border: 1px solid var(--border); }
+  .host-cell { font-family: var(--font-mono); color: var(--accent); font-size: 11px; }
+  .ts-cell   { font-family: var(--font-mono); color: var(--muted); font-size: 10px; }
+  .conf-bar  { display: inline-block; width: 60px; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; vertical-align: middle; margin-right: 6px; }
+  .conf-bar-fill { height: 100%; border-radius: 2px; background: var(--accent); }
+  .action-cell { color: var(--muted); font-size: 11px; }
+  .msg-cell  { max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 11px; }
+
+  /* ─── DETAIL DRAWER ─── */
+  .drawer-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 100; display: none; }
+  .drawer-overlay.open { display: block; }
+  .drawer {
+    position: fixed; right: 0; top: 0; bottom: 0; width: min(640px, 100vw);
+    background: var(--surface); border-left: 1px solid var(--border);
+    z-index: 101; overflow-y: auto; padding: 24px;
+    transform: translateX(100%); transition: transform .25s cubic-bezier(.4,0,.2,1);
+  }
+  .drawer.open { transform: none; }
+  .drawer-close { position: absolute; top: 16px; right: 16px; background: none; border: none; color: var(--muted); font-size: 20px; cursor: pointer; line-height: 1; }
+  .drawer-close:hover { color: var(--text); }
+  .drawer-section { margin-bottom: 20px; }
+  .drawer-section-title { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 10px; }
+  .drawer-kv { display: grid; grid-template-columns: 140px 1fr; gap: 6px 12px; font-size: 12px; }
+  .drawer-kv .k { color: var(--muted); }
+  .drawer-kv .v { color: var(--text); word-break: break-all; }
+  .reasoning-box {
+    background: var(--surface2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 14px; font-size: 12px; line-height: 1.7; color: var(--text);
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .action-box {
+    background: rgba(255,159,67,.05); border: 1px solid rgba(255,159,67,.2);
+    border-radius: 6px; padding: 14px; font-size: 12px; line-height: 1.6;
+    color: var(--text);
+  }
+  .caveat { font-size: 10px; color: var(--orange); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; }
+
+  /* ─── DISTRIBUTION BAR ─── */
+  .dist-bar { display: flex; height: 24px; border-radius: 4px; overflow: hidden; margin-bottom: 8px; }
+  .dist-segment { transition: width .5s ease; }
+  .dist-legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 11px; }
+  .dist-legend-item { display: flex; align-items: center; gap: 6px; }
+  .dist-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+  /* ─── HOTSPOT TABLE ─── */
+  .hotspot-bar { display: flex; align-items: center; gap: 8px; }
+  .hotspot-bar-track { flex: 1; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+  .hotspot-bar-fill  { height: 100%; border-radius: 2px; background: var(--accent); }
+  .hotspot-count { font-size: 11px; color: var(--muted); min-width: 28px; text-align: right; }
+
+  /* ─── EMPTY / ERROR STATES ─── */
+  .empty-state { text-align: center; padding: 48px 24px; color: var(--muted); font-size: 13px; }
+  .empty-state .icon { font-size: 32px; margin-bottom: 12px; }
+  .error-banner { background: rgba(255,71,87,.1); border: 1px solid rgba(255,71,87,.3); color: var(--red); border-radius: 6px; padding: 10px 16px; font-size: 12px; margin-bottom: 16px; }
+  .loading { color: var(--muted); font-size: 12px; padding: 24px; text-align: center; }
+
+  /* ─── PAGINATION ─── */
+  .pagination { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+  .page-btn { padding: 4px 10px; border: 1px solid var(--border); border-radius: 3px; background: transparent; color: var(--text); font-family: var(--font-mono); font-size: 11px; cursor: pointer; }
+  .page-btn:disabled { opacity: .3; cursor: not-allowed; }
+  .page-info { margin: 0 auto; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="logo">Triage<span>Ops</span></div>
+    <nav class="header-nav">
+      <button class="nav-btn active" onclick="showView('dashboard')">Dashboard</button>
+      <button class="nav-btn" onclick="showView('alerts')">Alerts</button>
+      <button class="nav-btn" onclick="showView('approvals')">Approvals</button>
+      <button class="nav-btn" onclick="showView('escalations')">Escalations</button>
+    </nav>
+    <div class="header-right">
+      <div class="live-dot" title="Live"></div>
+      <input class="api-key-input" id="apiKeyInput" type="password" placeholder="X-API-Key…" />
+      <button class="btn-refresh" id="refreshBtn" onclick="refresh()">↺ Refresh</button>
+    </div>
+  </header>
+  <main>
+
+    <!-- ── DASHBOARD VIEW ── -->
+    <div id="view-dashboard" class="view active">
+      <div id="statsGrid" class="stat-grid"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px">
+        <div>
+          <div class="section-header"><span class="section-title">Decision Distribution</span><span class="section-count" id="distWindow">24h</span></div>
+          <div class="table-wrap" style="padding:16px">
+            <div class="dist-bar" id="distBar"></div>
+            <div class="dist-legend" id="distLegend"></div>
+          </div>
+        </div>
+        <div>
+          <div class="section-header"><span class="section-title">Top Hosts</span></div>
+          <div class="table-wrap" id="hotspotTable"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── ALERTS VIEW ── -->
+    <div id="view-alerts" class="view">
+      <div class="filter-row" id="alertFilters">
+        <button class="filter-btn active" onclick="setAlertFilter('decision',null,this)">All</button>
+        <button class="filter-btn" onclick="setAlertFilter('decision','CRITICAL',this)">🔴 Critical</button>
+        <button class="filter-btn" onclick="setAlertFilter('decision','NOISE',this)">🔇 Noise</button>
+        <button class="filter-btn" onclick="setAlertFilter('decision','NEEDS_REVIEW',this)">🤔 Needs Review</button>
+        <button class="filter-btn" onclick="setAlertFilter('decision',null,this,true)">⏳ Unenriched</button>
+      </div>
+      <div id="alertError" class="error-banner" style="display:none"></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Alert ID</th><th>Host</th><th>Source</th><th>Severity</th>
+            <th>Decision</th><th>Confidence</th><th>Message</th><th>Received</th>
+          </tr></thead>
+          <tbody id="alertsBody"><tr><td colspan="8" class="loading">Enter API key and click Refresh</td></tr></tbody>
+        </table>
+        <div class="pagination" id="alertsPagination" style="display:none">
+          <button class="page-btn" id="alertPrev" onclick="changePage('alerts',-1)">← Prev</button>
+          <span class="page-info" id="alertPageInfo"></span>
+          <button class="page-btn" id="alertNext" onclick="changePage('alerts',1)">Next →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── APPROVALS VIEW ── -->
+    <div id="view-approvals" class="view">
+      <div class="filter-row">
+        <button class="filter-btn active" onclick="setApprovalFilter(null,this)">All</button>
+        <button class="filter-btn" onclick="setApprovalFilter('PENDING',this)">⏳ Pending</button>
+        <button class="filter-btn" onclick="setApprovalFilter('ACTIONED',this)">✅ Actioned</button>
+        <button class="filter-btn" onclick="setApprovalFilter('EXPIRED',this)">⌛ Expired</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>ID</th><th>Status</th><th>Action</th><th>By</th><th>Channel</th><th>Sent</th><th>Expires</th>
+          </tr></thead>
+          <tbody id="approvalsBody"><tr><td colspan="7" class="loading">Enter API key and click Refresh</td></tr></tbody>
+        </table>
+        <div class="pagination" id="approvalsPagination" style="display:none">
+          <button class="page-btn" id="approvalPrev" onclick="changePage('approvals',-1)">← Prev</button>
+          <span class="page-info" id="approvalPageInfo"></span>
+          <button class="page-btn" id="approvalNext" onclick="changePage('approvals',1)">Next →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── ESCALATIONS VIEW ── -->
+    <div id="view-escalations" class="view">
+      <div class="filter-row">
+        <button class="filter-btn active" onclick="setEscFilter(null,this)">All</button>
+        <button class="filter-btn" onclick="setEscFilter('TRIGGERED',this)">✅ Triggered</button>
+        <button class="filter-btn" onclick="setEscFilter('FAILED',this)">❌ Failed</button>
+        <button class="filter-btn" onclick="setEscFilter('SKIPPED',this)">⏭ Skipped</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Provider</th><th>Status</th><th>Incident ID</th><th>Triggered By</th><th>At</th><th>Error</th>
+          </tr></thead>
+          <tbody id="escalationsBody"><tr><td colspan="6" class="loading">Enter API key and click Refresh</td></tr></tbody>
+        </table>
+        <div class="pagination" id="escalationsPagination" style="display:none">
+          <button class="page-btn" id="escPrev" onclick="changePage('escalations',-1)">← Prev</button>
+          <span class="page-info" id="escPageInfo"></span>
+          <button class="page-btn" id="escNext" onclick="changePage('escalations',1)">Next →</button>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- ── DETAIL DRAWER ── -->
+<div class="drawer-overlay" id="drawerOverlay" onclick="closeDrawer()"></div>
+<div class="drawer" id="drawer">
+  <button class="drawer-close" onclick="closeDrawer()">✕</button>
+  <div id="drawerContent"></div>
+</div>
+
+<script>
+const BASE_URL = window.location.origin;
+
+// ─── State ───────────────────────────────────────────────────────────────────
+const state = {
+  apiKey: '',
+  alerts:      { page: 1, total: 0, filter: {}, unenrichedOnly: false },
+  approvals:   { page: 1, total: 0, filter: {} },
+  escalations: { page: 1, total: 0, filter: {} },
+};
+
+// ─── Utils ───────────────────────────────────────────────────────────────────
+function ts(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleString('en-GB', { month:'short', day:'2-digit', hour:'2-digit', minute:'2-digit', hour12: false });
+}
+function badge(cls) {
+  return `<span class="badge badge-${cls}">${cls.replace('_',' ')}</span>`;
+}
+function confBar(score) {
+  if (!score) return '—';
+  const pct = Math.round(parseFloat(score) * 100);
+  const color = pct >= 80 ? 'var(--green)' : pct >= 60 ? 'var(--yellow)' : 'var(--red)';
+  return `<span class="conf-bar"><span class="conf-bar-fill" style="width:${pct}%;background:${color}"></span></span>${pct}%`;
+}
+function escapeHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ─── API ─────────────────────────────────────────────────────────────────────
+async function api(path) {
+  const key = document.getElementById('apiKeyInput').value.trim();
+  if (!key) throw new Error('Enter an API key first');
+  const res = await fetch(`${BASE_URL}${path}`, {
+    headers: { 'X-API-Key': key }
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || res.statusText);
+  }
+  return res.json();
+}
+
+// ─── Navigation ──────────────────────────────────────────────────────────────
+function showView(name) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById(`view-${name}`).classList.add('active');
+  event.target.classList.add('active');
+  if (document.getElementById('apiKeyInput').value.trim()) loadView(name);
+}
+
+function loadView(name) {
+  if (name === 'dashboard') loadDashboard();
+  else if (name === 'alerts') loadAlerts();
+  else if (name === 'approvals') loadApprovals();
+  else if (name === 'escalations') loadEscalations();
+}
+
+async function refresh() {
+  const btn = document.getElementById('refreshBtn');
+  btn.disabled = true; btn.textContent = '…';
+  const active = document.querySelector('.nav-btn.active').textContent.toLowerCase().trim();
+  const viewMap = { dashboard:'dashboard', alerts:'alerts', approvals:'approvals', escalations:'escalations' };
+  try { loadView(viewMap[active] || 'dashboard'); }
+  finally { setTimeout(() => { btn.disabled=false; btn.textContent='↺ Refresh'; }, 600); }
+}
+
+// ─── Dashboard ───────────────────────────────────────────────────────────────
+async function loadDashboard() {
+  await Promise.all([loadStats(), loadDistribution(), loadHotspots()]);
+}
+
+async function loadStats() {
+  let data;
+  try { data = await api('/ops/stats'); } catch(e) { return renderStatError(e.message); }
+
+  const cards = [
+    { label:'Alerts (24h)',     value: data.alerts_24h,        sub: `${data.total_alerts} total`, accent: 'var(--accent)' },
+    { label:'Critical (24h)',   value: data.critical_24h,      sub: 'Needs immediate action',  accent: 'var(--red)' },
+    { label:'Noise (24h)',      value: data.noise_24h,         sub: `${data.noise_ratio_24h != null ? Math.round(data.noise_ratio_24h*100)+'% noise ratio' : '—'}`, accent: 'var(--green)' },
+    { label:'Needs Review',     value: data.needs_review_24h,  sub: 'Low confidence',          accent: 'var(--yellow)' },
+    { label:'Pending Approvals',value: data.pending_approvals, sub: 'Awaiting human action',   accent: 'var(--orange)' },
+    { label:'Escalations (24h)',value: data.escalations_24h,   sub: `${data.total_escalations} total`, accent: 'var(--blue)' },
+    { label:'AI Confidence',    value: data.avg_confidence_24h != null ? `${Math.round(data.avg_confidence_24h*100)}%` : '—', sub: '24h avg', accent: 'var(--accent)' },
+    { label:'LLM Latency',      value: data.avg_latency_ms_24h != null ? `${Math.round(data.avg_latency_ms_24h)}ms` : '—', sub: '24h avg', accent: 'var(--muted)' },
+  ];
+  document.getElementById('statsGrid').innerHTML = cards.map((c,i) => `
+    <div class="stat-card" style="--accent-color:${c.accent};animation-delay:${i*40}ms">
+      <div class="stat-label">${c.label}</div>
+      <div class="stat-value">${c.value}</div>
+      <div class="stat-sub">${c.sub}</div>
+    </div>
+  `).join('');
+}
+
+function renderStatError(msg) {
+  document.getElementById('statsGrid').innerHTML = `<div class="error-banner" style="grid-column:1/-1">${escapeHtml(msg)}</div>`;
+}
+
+async function loadDistribution() {
+  let data;
+  try { data = await api('/ops/stats/distribution'); } catch { return; }
+  const colours = { CRITICAL: 'var(--red)', NOISE: 'var(--green)', NEEDS_REVIEW: 'var(--yellow)' };
+  const bar  = document.getElementById('distBar');
+  const legend = document.getElementById('distLegend');
+  if (!data.length) { bar.innerHTML = '<div style="flex:1;background:var(--border)"></div>'; legend.innerHTML='<span style="color:var(--muted);font-size:11px">No data yet</span>'; return; }
+  bar.innerHTML = data.map(d => `<div class="dist-segment" title="${d.decision}: ${d.percentage}%" style="flex:${d.count};background:${colours[d.decision]||'var(--blue)'}"></div>`).join('');
+  legend.innerHTML = data.map(d => `<div class="dist-legend-item"><div class="dist-dot" style="background:${colours[d.decision]||'var(--blue)'}"></div>${d.decision} <strong>${d.percentage}%</strong></div>`).join('');
+}
+
+async function loadHotspots() {
+  let data;
+  try { data = await api('/ops/stats/hotspots?limit=8'); } catch { return; }
+  const max = data[0]?.alert_count || 1;
+  document.getElementById('hotspotTable').innerHTML = data.length ? `
+    <table><thead><tr><th>Host</th><th>Alerts</th><th>Critical</th><th>Last seen</th></tr></thead>
+    <tbody>${data.map(h => `<tr>
+      <td class="host-cell">${escapeHtml(h.host)}</td>
+      <td><div class="hotspot-bar"><div class="hotspot-bar-track"><div class="hotspot-bar-fill" style="width:${Math.round(h.alert_count/max*100)}%"></div></div><span class="hotspot-count">${h.alert_count}</span></div></td>
+      <td>${h.critical_count > 0 ? `<span style="color:var(--red)">${h.critical_count}</span>` : '—'}</td>
+      <td class="ts-cell">${ts(h.last_seen)}</td>
+    </tr>`).join('')}</tbody></table>
+  ` : '<div class="empty-state"><div class="icon">📊</div>No alert data yet</div>';
+}
+
+// ─── Alerts ──────────────────────────────────────────────────────────────────
+function setAlertFilter(key, val, btn, unenriched) {
+  document.querySelectorAll('#alertFilters .filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  state.alerts.filter = val ? { [key]: val } : {};
+  state.alerts.unenrichedOnly = !!unenriched;
+  state.alerts.page = 1;
+  loadAlerts();
+}
+
+async function loadAlerts() {
+  const s = state.alerts;
+  const params = new URLSearchParams({ page: s.page, page_size: 25, ...s.filter });
+  let data;
+  try {
+    document.getElementById('alertError').style.display = 'none';
+    data = await api(`/ops/alerts?${params}`);
+  } catch(e) {
+    document.getElementById('alertError').textContent = e.message;
+    document.getElementById('alertError').style.display = 'block';
+    return;
+  }
+  s.total = data.total;
+  const rows = s.unenrichedOnly ? data.items.filter(a => !a.triage_decision) : data.items;
+  document.getElementById('alertsBody').innerHTML = rows.length
+    ? rows.map(a => `<tr onclick="openAlertDrawer('${a.id}')">
+        <td class="host-cell">${escapeHtml(a.alert_id)}</td>
+        <td class="host-cell">${escapeHtml(a.host)}</td>
+        <td>${badge(a.source)}</td>
+        <td>${badge(a.severity)}</td>
+        <td>${a.triage_decision ? badge(a.triage_decision) : '<span style="color:var(--muted);font-size:10px">pending</span>'}</td>
+        <td>${confBar(a.confidence_score)}</td>
+        <td class="msg-cell">${escapeHtml(a.message)}</td>
+        <td class="ts-cell">${ts(a.received_at)}</td>
+      </tr>`).join('')
+    : '<tr><td colspan="8"><div class="empty-state"><div class="icon">✅</div>No alerts match this filter</div></td></tr>';
+  renderPagination('alerts', s.page, s.total, 25);
+}
+
+// ─── Approvals ───────────────────────────────────────────────────────────────
+function setApprovalFilter(val, btn) {
+  document.querySelectorAll('#view-approvals .filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  state.approvals.filter = val ? { status: val } : {};
+  state.approvals.page = 1;
+  loadApprovals();
+}
+
+async function loadApprovals() {
+  const s = state.approvals;
+  const params = new URLSearchParams({ page: s.page, page_size: 25, ...s.filter });
+  let data;
+  try { data = await api(`/ops/approvals?${params}`); } catch(e) {
+    document.getElementById('approvalsBody').innerHTML = `<tr><td colspan="7"><div class="error-banner">${escapeHtml(e.message)}</div></td></tr>`;
+    return;
+  }
+  s.total = data.total;
+  document.getElementById('approvalsBody').innerHTML = data.items.length
+    ? data.items.map(a => `<tr>
+        <td class="ts-cell">${String(a.id).slice(0,8)}…</td>
+        <td>${badge(a.status)}</td>
+        <td>${a.action ? badge(a.action) : '—'}</td>
+        <td class="action-cell">${escapeHtml(a.actioned_by_name||'—')}</td>
+        <td class="action-cell">${escapeHtml(a.slack_channel)}</td>
+        <td class="ts-cell">${ts(a.sent_at)}</td>
+        <td class="ts-cell">${a.expires_at ? ts(a.expires_at) : '—'}</td>
+      </tr>`).join('')
+    : '<tr><td colspan="7"><div class="empty-state"><div class="icon">💬</div>No approvals yet</div></td></tr>';
+  renderPagination('approvals', s.page, s.total, 25);
+}
+
+// ─── Escalations ─────────────────────────────────────────────────────────────
+function setEscFilter(val, btn) {
+  document.querySelectorAll('#view-escalations .filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  state.escalations.filter = val ? { status: val } : {};
+  state.escalations.page = 1;
+  loadEscalations();
+}
+
+async function loadEscalations() {
+  const s = state.escalations;
+  const params = new URLSearchParams({ page: s.page, page_size: 25, ...s.filter });
+  let data;
+  try { data = await api(`/ops/escalations?${params}`); } catch(e) {
+    document.getElementById('escalationsBody').innerHTML = `<tr><td colspan="6"><div class="error-banner">${escapeHtml(e.message)}</div></td></tr>`;
+    return;
+  }
+  s.total = data.total;
+  document.getElementById('escalationsBody').innerHTML = data.items.length
+    ? data.items.map(e => `<tr>
+        <td>${badge(e.provider)}</td>
+        <td>${badge(e.status)}</td>
+        <td class="ts-cell">${escapeHtml(e.provider_incident_id||'—')}</td>
+        <td class="action-cell">${escapeHtml(e.triggered_by||'—')}</td>
+        <td class="ts-cell">${ts(e.triggered_at)}</td>
+        <td class="msg-cell" style="color:var(--red)">${escapeHtml(e.error_detail||'—')}</td>
+      </tr>`).join('')
+    : '<tr><td colspan="6"><div class="empty-state"><div class="icon">🚀</div>No escalations yet</div></td></tr>';
+  renderPagination('escalations', s.page, s.total, 25);
+}
+
+// ─── Pagination ───────────────────────────────────────────────────────────────
+function renderPagination(view, page, total, pageSize) {
+  const totalPages = Math.ceil(total / pageSize) || 1;
+  const mapId = { alerts: ['alertsPagination','alertPrev','alertNext','alertPageInfo'],
+                  approvals: ['approvalsPagination','approvalPrev','approvalNext','approvalPageInfo'],
+                  escalations: ['escalationsPagination','escPrev','escNext','escPageInfo'] };
+  const [wrapId, prevId, nextId, infoId] = mapId[view];
+  const wrap = document.getElementById(wrapId);
+  wrap.style.display = total > pageSize ? 'flex' : 'none';
+  document.getElementById(prevId).disabled = page <= 1;
+  document.getElementById(nextId).disabled = page >= totalPages;
+  document.getElementById(infoId).textContent = `Page ${page} of ${totalPages} · ${total} total`;
+}
+
+function changePage(view, delta) {
+  const s = state[view];
+  s.page = Math.max(1, s.page + delta);
+  loadView(view);
+}
+
+// ─── Alert Detail Drawer ─────────────────────────────────────────────────────
+async function openAlertDrawer(id) {
+  document.getElementById('drawerContent').innerHTML = '<div class="loading">Loading…</div>';
+  document.getElementById('drawer').classList.add('open');
+  document.getElementById('drawerOverlay').classList.add('open');
+  let data;
+  try { data = await api(`/ops/alerts/${id}`); }
+  catch(e) { document.getElementById('drawerContent').innerHTML = `<div class="error-banner">${escapeHtml(e.message)}</div>`; return; }
+
+  const e = data.enrichment;
+  const a = data.latest_approval;
+
+  document.getElementById('drawerContent').innerHTML = `
+    <div style="margin-bottom:20px">
+      <div style="font-family:var(--font-head);font-size:20px;font-weight:800;margin-bottom:6px">${escapeHtml(data.host)}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">${badge(data.severity)} ${badge(data.source)} ${e ? badge(e.triage_decision) : ''}</div>
+    </div>
+
+    <div class="drawer-section">
+      <div class="drawer-section-title">Alert</div>
+      <div class="drawer-kv">
+        <span class="k">Alert ID</span><span class="v">${escapeHtml(data.alert_id)}</span>
+        <span class="k">Received</span><span class="v">${ts(data.received_at)}</span>
+        <span class="k">Message</span><span class="v">${escapeHtml(data.message)}</span>
+      </div>
+    </div>
+
+    ${e ? `
+    <div class="drawer-section">
+      <div class="drawer-section-title">AI Triage</div>
+      <div class="drawer-kv" style="margin-bottom:12px">
+        <span class="k">Confidence</span><span class="v">${confBar(e.confidence_score)}</span>
+        <span class="k">Category</span><span class="v">${escapeHtml(e.alert_category||'—')}</span>
+        <span class="k">Model</span><span class="v">${escapeHtml(e.model_used)}</span>
+        <span class="k">Prompt</span><span class="v">${escapeHtml(e.prompt_version)}</span>
+        <span class="k">Tokens</span><span class="v">${e.prompt_tokens||'?'}p / ${e.completion_tokens||'?'}c</span>
+        <span class="k">Latency</span><span class="v">${e.latency_ms||'?'}ms</span>
+      </div>
+      <div class="reasoning-box">${escapeHtml(e.llm_reasoning||'No reasoning provided')}</div>
+    </div>
+
+    ${e.suggested_action ? `
+    <div class="drawer-section">
+      <div class="drawer-section-title">Suggested Action</div>
+      <div class="action-box">
+        <div class="caveat">⚠ AI suggestion — verify before executing</div>
+        ${escapeHtml(e.suggested_action)}
+      </div>
+    </div>` : ''}
+
+    ${e.runbook_refs?.length ? `
+    <div class="drawer-section">
+      <div class="drawer-section-title">Runbook References</div>
+      ${e.runbook_refs.map(r => `
+        <div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:12px">
+          <div style="color:var(--text);margin-bottom:3px">${r.url ? `<a href="${escapeHtml(r.url)}" target="_blank" style="color:var(--accent)">${escapeHtml(r.title)}</a> <span style="font-size:10px;color:var(--orange)">(⚠ AI-generated link)</span>` : escapeHtml(r.title)}</div>
+          ${r.relevance ? `<div style="color:var(--muted)">${escapeHtml(r.relevance)}</div>` : ''}
+        </div>
+      `).join('')}
+    </div>` : ''}
+    ` : '<div class="drawer-section"><div class="empty-state" style="padding:20px"><div class="icon">⏳</div>Not yet enriched</div></div>'}
+
+    ${a ? `
+    <div class="drawer-section">
+      <div class="drawer-section-title">Latest Approval</div>
+      <div class="drawer-kv">
+        <span class="k">Status</span><span class="v">${badge(a.status)}</span>
+        <span class="k">Action</span><span class="v">${a.action ? badge(a.action) : '—'}</span>
+        <span class="k">By</span><span class="v">${escapeHtml(a.actioned_by_name||'—')}</span>
+        <span class="k">At</span><span class="v">${ts(a.actioned_at)}</span>
+        <span class="k">Channel</span><span class="v">${escapeHtml(a.slack_channel)}</span>
+      </div>
+    </div>` : ''}
+  `;
+}
+
+function closeDrawer() {
+  document.getElementById('drawer').classList.remove('open');
+  document.getElementById('drawerOverlay').classList.remove('open');
+}
+
+// Auto-refresh dashboard every 60s if key is set
+setInterval(() => {
+  if (document.getElementById('apiKeyInput').value.trim()
+      && document.querySelector('.nav-btn.active')?.textContent.trim().toLowerCase() === 'dashboard') {
+    loadDashboard();
+  }
+}, 60000);
+</script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+# nixpacks.toml — Railway fallback config if Dockerfile is not detected
+# Railway prefers Dockerfile when present; this is a safety net.
+
+[phases.setup]
+nixPkgs = ["postgresql_15"]
+
+[phases.install]
+cmds = ["pip install -r requirements.txt"]
+
+[phases.build]
+cmds = [
+  "mkdir -p db middleware routers llm slack escalation suppression alembic scripts tests",
+  "touch db/__init__.py middleware/__init__.py routers/__init__.py llm/__init__.py slack/__init__.py escalation/__init__.py suppression/__init__.py alembic/__init__.py scripts/__init__.py tests/__init__.py"
+]
+
+[start]
+cmd = "uvicorn main:app --host 0.0.0.0 --port $PORT"

@@ -1,0 +1,173 @@
+version: "3.9"
+
+# TriageOps — local development stack
+# ─────────────────────────────────────
+# Quick start:
+#   cp .env.example .env          # fill in required secrets
+#   docker compose up --build     # starts all services
+#   docker compose exec app alembic upgrade head
+#   docker compose exec app python scripts/seed_api_key.py --tenant my-noc
+#
+# Dashboard:  http://localhost:8000/dashboard
+# API docs:   http://localhost:8000/docs
+# Flower:     http://localhost:5555  (docker compose --profile dev up)
+#
+# ⚠️  NEVER run more than one `beat` replica — duplicate schedules = double pages
+
+x-app-env: &app-env
+  DATABASE_URL:            postgresql://triageops:${POSTGRES_PASSWORD:-triageops_dev}@postgres:5432/triageops
+  REDIS_URL:               redis://redis:6379/0
+  APP_ENV:                 ${APP_ENV:-development}
+  APP_VERSION:             ${APP_VERSION:-dev}
+  LOG_LEVEL:               ${LOG_LEVEL:-INFO}
+  SENTRY_DSN:              ${SENTRY_DSN:-}
+  BOOTSTRAP_API_KEY:       ${BOOTSTRAP_API_KEY:-dev-bootstrap-key-change-me}
+  OPENAI_API_KEY:          ${OPENAI_API_KEY:-}
+  OPENAI_MODEL:            ${OPENAI_MODEL:-gpt-4o-2024-11-20}
+  SLACK_BOT_TOKEN:         ${SLACK_BOT_TOKEN:-}
+  SLACK_SIGNING_SECRET:    ${SLACK_SIGNING_SECRET:-}
+  SLACK_ALERT_CHANNEL:     ${SLACK_ALERT_CHANNEL:-#noc-triage}
+  SLACK_CHANNEL_CRITICAL:  ${SLACK_CHANNEL_CRITICAL:-}
+  SLACK_CHANNEL_NOISE:     ${SLACK_CHANNEL_NOISE:-}
+  PAGERDUTY_ROUTING_KEY:   ${PAGERDUTY_ROUTING_KEY:-}
+  OPSGENIE_API_KEY:        ${OPSGENIE_API_KEY:-}
+  OPSGENIE_API_URL:        ${OPSGENIE_API_URL:-https://api.opsgenie.com}
+  OPSGENIE_RESPONDERS:     ${OPSGENIE_RESPONDERS:-}
+  ESCALATION_WEBHOOK_URL:  ${ESCALATION_WEBHOOK_URL:-}
+  ESCALATION_WEBHOOK_SECRET: ${ESCALATION_WEBHOOK_SECRET:-}
+  APPROVAL_TTL_HOURS:      ${APPROVAL_TTL_HOURS:-24}
+  RATE_LIMITING_ENABLED:   ${RATE_LIMITING_ENABLED:-true}
+  CORS_ALLOWED_ORIGINS:    ${CORS_ALLOWED_ORIGINS:-http://localhost:8000}
+
+services:
+
+  # ── PostgreSQL 16 ────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     triageops
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-triageops_dev}
+      POSTGRES_DB:       triageops
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:     ["CMD-SHELL", "pg_isready -U triageops -d triageops"]
+      interval: 5s
+      timeout:  5s
+      retries:  10
+      start_period: 10s
+
+  # ── Redis 7 ──────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test:     ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout:  3s
+      retries:  10
+
+  # ── FastAPI app ───────────────────────────────────────────────────────────
+  app:
+    build:
+      context:    .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      <<: *app-env
+      SQL_ECHO: ${SQL_ECHO:-false}
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+    healthcheck:
+      test:         ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      interval:     10s
+      timeout:       5s
+      retries:       5
+      start_period: 20s
+
+  # ── Celery worker ─────────────────────────────────────────────────────────
+  # concurrency=2: LLM tasks are I/O bound but OpenAI rate-limited.
+  # Increase only after upgrading OpenAI tier.
+  worker:
+    build:
+      context:    .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: >
+      celery -A tasks.celery_app worker
+      --loglevel=info
+      --concurrency=2
+      -Q enrichment,default
+      --hostname=worker@%h
+    environment:
+      <<: *app-env
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+    healthcheck:
+      test:         ["CMD-SHELL", "celery -A tasks.celery_app inspect ping -d worker@$$HOSTNAME || exit 1"]
+      interval:     30s
+      timeout:      15s
+      retries:       3
+      start_period: 25s
+
+  # ── Celery Beat ───────────────────────────────────────────────────────────
+  # ⚠️  SINGLETON — do not scale above 1 replica
+  # Beat state persisted to beat_schedule volume so it survives restarts.
+  beat:
+    build:
+      context:    .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: >
+      celery -A tasks.celery_app beat
+      --loglevel=info
+      --scheduler celery.beat:PersistentScheduler
+      --schedule /var/celery/beat-schedule
+    environment:
+      <<: *app-env
+    volumes:
+      - beat_schedule:/var/celery
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+
+  # ── Flower — task monitor (dev profile only) ──────────────────────────────
+  # Start with: docker compose --profile dev up
+  flower:
+    build:
+      context:    .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: >
+      celery -A tasks.celery_app flower
+      --port=5555
+      --basic_auth=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-triageops_dev}
+    ports:
+      - "5555:5555"
+    environment:
+      <<: *app-env
+    depends_on:
+      - redis
+    profiles:
+      - dev
+
+volumes:
+  postgres_data:
+  redis_data:
+  beat_schedule:

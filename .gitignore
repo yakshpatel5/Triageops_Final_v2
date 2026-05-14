@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Environment
+.env
+*.local
+
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env.local
+frontend/.env.production
+
+# Alembic beat schedule
+/var/celery/
+beat-schedule
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Docker
+.docker/
