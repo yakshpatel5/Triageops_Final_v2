@@ -168,25 +168,25 @@ if _os_fe.path.isdir(_frontend_dist):
         # V1.2: wire prometheus-client counters
         return "# HELP triageops_up Service health\n# TYPE triageops_up gauge\ntriageops_up 1\n"
 
-    def custom_openapi():
-        if app.openapi_schema:
-            return app.openapi_schema
-        schema = get_openapi(
-            title=app.title, version=app.version,
-            description=app.description, routes=app.routes,
-        )
-        schema["components"]["securitySchemes"] = {
-            "ApiKeyAuth": {
-                "type": "apiKey", "in": "header", "name": "X-API-Key",
-                "description": "Tenant API key. Generate with: make seed-key TENANT=<id>",
-            }
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(
+        title=app.title, version=app.version,
+        description=app.description, routes=app.routes,
+    )
+    schema["components"]["securitySchemes"] = {
+        "ApiKeyAuth": {
+            "type": "apiKey", "in": "header", "name": "X-API-Key",
+            "description": "Tenant API key. Generate with: make seed-key TENANT=<id>",
         }
-        schema["security"] = [{"ApiKeyAuth": []}]
-        app.openapi_schema = schema
-        return schema
+    }
+    schema["security"] = [{"ApiKeyAuth": []}]
+    app.openapi_schema = schema
+    return schema
 
-    app.openapi = custom_openapi
-    return app
+app.openapi = custom_openapi
+return app
 
 
 app = create_app()
