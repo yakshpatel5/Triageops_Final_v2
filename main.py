@@ -143,50 +143,50 @@ def create_app() -> FastAPI:
         app.mount("/dashboard", StaticFiles(directory=_dash, html=True), name="dashboard")
 
 # ── React frontend (Anthropic UI) ─────────────────────────────────────────
-import os as _os_fe
-_frontend_dist = _os_fe.path.join(_os_fe.path.dirname(__file__), "frontend", "dist")
-if _os_fe.path.isdir(_frontend_dist):
-    app.mount("/app", StaticFiles(directory=_frontend_dist, html=True), name="frontend")
-
+    import os as _os_fe
+    _frontend_dist = _os_fe.path.join(_os_fe.path.dirname(__file__), "frontend", "dist")
+    if _os_fe.path.isdir(_frontend_dist):
+        app.mount("/app", StaticFiles(directory=_frontend_dist, html=True), name="frontend")
+    
     from routers.webhook import router as webhook_router
     from routers.slack_interactions import router as slack_router
     from routers.ops import router as ops_router
     from routers.suppression import router as suppression_router
-
+    
     app.include_router(webhook_router)
     app.include_router(slack_router)
     app.include_router(ops_router)
     app.include_router(suppression_router)
-
+    
     @app.get("/health", tags=["ops"], include_in_schema=False)
     async def health() -> dict:
         return {"status": "ok", "version": os.getenv("APP_VERSION", "dev")}
-
+    
     @app.get("/metrics", tags=["ops"], include_in_schema=False,
              response_class=PlainTextResponse)
     async def metrics() -> str:
         # V1.2: wire prometheus-client counters
         return "# HELP triageops_up Service health\n# TYPE triageops_up gauge\ntriageops_up 1\n"
-
-def custom_openapi():
-    if app.openapi_schema:
-        return app.openapi_schema
-    schema = get_openapi(
-        title=app.title, version=app.version,
-        description=app.description, routes=app.routes,
-    )
-    schema["components"]["securitySchemes"] = {
-        "ApiKeyAuth": {
-            "type": "apiKey", "in": "header", "name": "X-API-Key",
-            "description": "Tenant API key. Generate with: make seed-key TENANT=<id>",
+    
+    def custom_openapi():
+        if app.openapi_schema:
+            return app.openapi_schema
+        schema = get_openapi(
+            title=app.title, version=app.version,
+            description=app.description, routes=app.routes,
+        )
+        schema["components"]["securitySchemes"] = {
+            "ApiKeyAuth": {
+                "type": "apiKey", "in": "header", "name": "X-API-Key",
+                "description": "Tenant API key. Generate with: make seed-key TENANT=<id>",
+            }
         }
-    }
-    schema["security"] = [{"ApiKeyAuth": []}]
-    app.openapi_schema = schema
-    return schema
-
-app.openapi = custom_openapi
-return app
+        schema["security"] = [{"ApiKeyAuth": []}]
+        app.openapi_schema = schema
+        return schema
+    
+    app.openapi = custom_openapi
+    return app
 
 
 app = create_app()
