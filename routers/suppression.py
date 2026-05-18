@@ -248,7 +248,8 @@ async def update_rule(
 # DELETE /ops/suppression/{rule_id}
 # ---------------------------------------------------------------------------
 
-@router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
+# FIXED — add response_model=None:
+@router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def delete_rule(
     rule_id: uuid.UUID,
     tenant_id: TenantDep,
