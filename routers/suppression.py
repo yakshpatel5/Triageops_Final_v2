@@ -1,27 +1,10 @@
-"""
-routers/suppression.py — CRUD API for suppression rules.
-
-All endpoints are tenant-scoped via X-API-Key auth middleware (same as /ops/*).
-Rules are read-only from the API in terms of decisions — you can deactivate,
-update, or delete, but auto-creation happens only via Slack SUPPRESS action.
-
-Endpoints:
-  GET    /ops/suppression             — list active + recent rules (paginated)
-  POST   /ops/suppression             — create a rule manually
-  GET    /ops/suppression/{id}        — rule detail with hit stats
-  PATCH  /ops/suppression/{id}        — update pattern or deactivate
-  DELETE /ops/suppression/{id}        — hard delete (rare — prefer deactivate)
-  POST   /ops/suppression/test        — test a pattern against a sample alert
-                                        without creating a rule
-"""
-
 from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, Response
 from loguru import logger
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -225,7 +208,7 @@ async def update_rule(
 
     if body.is_active is not None:
         if body.is_active not in ("0", "1"):
-            raise HTTPException(status_code=422, detail="is_active must be '0' or '1'")
+            raise HTTPException(status_code=422, detail="is_active must be \'0\' or \'1\'")
         rule.is_active = body.is_active
     if body.reason      is not None: rule.reason          = body.reason
     if body.expires_at  is not None: rule.expires_at      = body.expires_at
@@ -247,8 +230,6 @@ async def update_rule(
 # ---------------------------------------------------------------------------
 # DELETE /ops/suppression/{rule_id}
 # ---------------------------------------------------------------------------
-
-from fastapi import Response
 
 @router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
 async def delete_rule(
