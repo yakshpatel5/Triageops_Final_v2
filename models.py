@@ -193,7 +193,7 @@ class SlackApproval(Base):
 
     __table_args__ = (
         Index("ix_slack_approvals_tenant_status", "tenant_id", "status"),
-        Index("ix_slack_approvals_slack_ts",      "slack_ts"),
+        #Index("ix_slack_approvals_slack_ts",      "slack_ts"),
     )
 
     def __repr__(self) -> str:
