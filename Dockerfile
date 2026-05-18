@@ -1,10 +1,10 @@
 # TriageOps — production Dockerfile
-# Multi-stage: builder installs Python deps; runtime adds Node build + app
+# Three-stage build: Python deps -> React build -> Slim Runtime
 
 # ---------------------------------------------------------------------------
 # Stage 1: Python dependency builder
 # ---------------------------------------------------------------------------
-FROM python:3.11-slim AS builder
+FROM python:3.11-slim AS py-builder
 
 WORKDIR /build
 
@@ -18,31 +18,45 @@ RUN pip install --upgrade pip \
 
 
 # ---------------------------------------------------------------------------
-# Stage 2: Runtime
+# Stage 2: Frontend builder
+# ---------------------------------------------------------------------------
+FROM node:20-slim AS fe-builder
+
+WORKDIR /app/frontend
+COPY frontend/package*.json ./
+RUN npm install --legacy-peer-deps
+COPY frontend/ ./
+RUN npm run build
+
+
+# ---------------------------------------------------------------------------
+# Stage 3: Runtime
 # ---------------------------------------------------------------------------
 FROM python:3.11-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq-dev curl nodejs npm \
+    libpq-dev curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /install /usr/local
+# Copy Python dependencies
+COPY --from=py-builder /install /usr/local
 
+# Create non-root user
 RUN groupadd -g 1001 appgroup && useradd -u 1001 -g appgroup -s /bin/sh appuser
 WORKDIR /app
+
+# Copy application code
 COPY --chown=appuser:appgroup . .
 
-# FIX: schemas is schemas.py (a file, not a package directory)
+# Copy built frontend assets
+COPY --from=fe-builder --chown=appuser:appgroup /app/frontend/dist ./frontend/dist
+
+# Ensure package structure
 RUN mkdir -p db middleware routers llm slack escalation suppression alembic scripts tests teams \
     && touch db/__init__.py middleware/__init__.py routers/__init__.py \
              llm/__init__.py slack/__init__.py escalation/__init__.py \
              suppression/__init__.py alembic/__init__.py scripts/__init__.py \
              tests/__init__.py teams/__init__.py
-
-# Build React frontend
-RUN if [ -d "frontend" ]; then \
-    cd frontend && npm install --legacy-peer-deps && npm run build && cd ..; \
-    fi
 
 # Give appuser write access to beat schedule directory
 RUN mkdir -p /var/celery && chown -R appuser:appgroup /var/celery

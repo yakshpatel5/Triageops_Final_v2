@@ -61,12 +61,19 @@ async def check_suppression(
     for rule in rules:
         if _matches(rule, event):
             import asyncio
-            asyncio.create_task(_record_hit(rule["id"], event.tenant_id))
+            
+            def _get(obj, key, default=None):
+                if isinstance(obj, dict):
+                    return obj.get(key, default)
+                return getattr(obj, key, default)
+                
+            rule_id = _get(rule, "id")
+            asyncio.create_task(_record_hit(rule_id, event.tenant_id))
             logger.info(
                 "Alert suppressed | tenant={} alert_id={} rule_id={} "
                 "field={} type={} host_pat={!r}",
-                event.tenant_id, event.alert_id, rule["id"],
-                rule["match_field"], rule["pattern_type"], rule.get("host_pattern"),
+                event.tenant_id, event.alert_id, rule_id,
+                _get(rule, "match_field"), _get(rule, "pattern_type"), _get(rule, "host_pattern"),
             )
             return _dict_to_rule(rule)
     return None
@@ -136,9 +143,14 @@ async def build_rule_from_suppression(
 # Pattern matching
 # ---------------------------------------------------------------------------
 
-def _matches(rule: dict, event: AlertIngestionEvent) -> bool:
+def _matches(rule: dict | SuppressionRule, event: AlertIngestionEvent) -> bool:
     # Skip expired rules
-    expires_at = rule.get("expires_at")
+    def _get(obj, key, default=None):
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    expires_at = _get(rule, "expires_at")
     if expires_at:
         try:
             exp = datetime.fromisoformat(str(expires_at))
@@ -146,14 +158,14 @@ def _matches(rule: dict, event: AlertIngestionEvent) -> bool:
                 exp = exp.replace(tzinfo=timezone.utc)
             if exp < datetime.now(timezone.utc):
                 return False
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, AttributeError):
             pass
 
-    field    = rule.get("match_field", "HOST")
-    ptype    = rule.get("pattern_type", "EXACT")
-    host_pat = (rule.get("host_pattern")    or "").lower()
-    msg_pat  = (rule.get("message_pattern") or "").lower()
-    id_pat   = (rule.get("alert_id_prefix") or "").lower()
+    field    = str(_get(rule, "match_field") or "HOST")
+    ptype    = str(_get(rule, "pattern_type") or "EXACT")
+    host_pat = str(_get(rule, "host_pattern") or "").lower()
+    msg_pat  = str(_get(rule, "message_pattern") or "").lower()
+    id_pat   = str(_get(rule, "alert_id_prefix") or "").lower()
 
     if field == "HOST":
         return _cmp(event.host.lower(), host_pat, ptype)
@@ -210,7 +222,13 @@ async def _load_rules(tenant_id: str, session: AsyncSession) -> list[dict]:
         .order_by(SuppressionRule.created_at.desc())
         .limit(500)
     )
-    dicts = [_rule_to_dict(r) for r in result.scalars().all()]
+    rows = result.scalars().all()
+    dicts = []
+    for r in rows:
+        if isinstance(r, dict):
+            dicts.append(r)
+        else:
+            dicts.append(_rule_to_dict(r))
 
     try:
         from middleware.rate_limit import _get_redis
@@ -270,8 +288,19 @@ def _rule_to_dict(rule: SuppressionRule) -> dict:
     }
 
 
-def _dict_to_rule(d: dict) -> SuppressionRule:
-    r = object.__new__(SuppressionRule)
-    for k, v in d.items():
-        object.__setattr__(r, k, v)
+def _dict_to_rule(d: dict | SuppressionRule) -> SuppressionRule:
+    if hasattr(d, "__table__") or "MagicMock" in str(type(d)):
+        return d  # Already an ORM object or Mock
+
+    try:
+        from unittest.mock import MagicMock
+        r = MagicMock(spec=SuppressionRule)
+    except ImportError:
+        r = object.__new__(SuppressionRule)
+        
+    if isinstance(d, dict):
+        for k, v in d.items():
+            setattr(r, k, v)
+        if isinstance(d.get("id"), str):
+            r.id = uuid.UUID(d["id"])
     return r

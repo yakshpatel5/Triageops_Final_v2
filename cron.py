@@ -24,6 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.session import get_session
+from escalation.dispatcher import dispatch_escalation
 from models import Alert, AlertEnrichment, EscalationEvent, SlackApproval
 
 
@@ -124,8 +125,6 @@ async def _run_escalate_unactioned_criticals() -> dict:
     FIX: subquery now correctly checks EscalationEvent (not Alert) to determine
     whether an escalation has already been sent.
     """
-    from escalation.dispatcher import dispatch_escalation
-
     escalated: list[str] = []
     skipped:   list[str] = []
 

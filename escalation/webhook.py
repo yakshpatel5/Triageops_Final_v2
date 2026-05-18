@@ -13,9 +13,12 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import json
+import socket
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from loguru import logger
@@ -26,6 +29,38 @@ class WebhookError(Exception):
     def __init__(self, msg: str, retryable: bool = False):
         super().__init__(msg)
         self.retryable = retryable
+
+
+BLOCKED_RANGES = [
+    ipaddress.ip_network("169.254.0.0/16"),  # AWS/Cloud metadata
+    ipaddress.ip_network("10.0.0.0/8"),      # Private RFC1918
+    ipaddress.ip_network("172.16.0.0/12"),   # Private RFC1918
+    ipaddress.ip_network("192.168.0.0/16"),  # Private RFC1918
+    ipaddress.ip_network("127.0.0.0/8"),     # Loopback
+    ipaddress.ip_network("::1/128"),         # IPv6 Loopback
+    ipaddress.ip_network("fe80::/10"),       # IPv6 Link-local
+]
+
+
+def is_safe_url(url: str) -> bool:
+    """
+    Check if a URL is safe from SSRF by verifying its hostname resolves to a public IP.
+    """
+    try:
+        parsed = urlparse(url)
+        if not parsed.hostname:
+            return False
+        
+        # Resolve hostname to IP
+        # Note: This is vulnerable to DNS rebinding if the client doesn't pin the IP.
+        # For a production system, we should resolve once and use the IP in the request.
+        ip_str = socket.gethostbyname(parsed.hostname)
+        ip = ipaddress.ip_address(ip_str)
+        
+        return not any(ip in net for net in BLOCKED_RANGES)
+    except Exception as exc:
+        logger.warning("SSRF check failed for URL {}: {}", url, exc)
+        return False
 
 
 @retry(
@@ -49,6 +84,10 @@ async def trigger_webhook(
     **_,   # absorb extra kwargs from dispatcher's common_kwargs
 ) -> dict[str, Any]:
     """POST a signed escalation payload to the configured webhook URL."""
+    
+    if not is_safe_url(url):
+        logger.error("SSRF protection blocked webhook escalation to unsafe URL: {}", url)
+        raise WebhookError(f"Unsafe webhook URL: {url}", retryable=False)
 
     payload = {
         "event": "triageops.escalation",

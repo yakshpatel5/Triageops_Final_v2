@@ -65,7 +65,8 @@ def test_triage_output_sanitises_shell_injection():
     payload = {**VALID_LLM_JSON, "suggested_action": "df -h && rm -rf /var/log/*"}
     t = TriageOutput.model_validate(payload)
     assert "redacted" in t.suggested_action
-    assert "rm -" in t.suggested_action   # original pattern named in redaction msg
+    # The actual message is "[suggested action redacted — contained unsafe pattern: '&&']"
+    assert "&&" in t.suggested_action
 
 
 def test_triage_output_sanitises_subshell():
@@ -154,7 +155,8 @@ async def test_classify_alert_schema_validation_failure_returns_needs_review():
     # Must degrade gracefully — never surface a bad classification
     assert result.triage_output.decision == "NEEDS_REVIEW"
     assert result.triage_output.confidence_score == 0.0
-    assert "validation failed" in result.triage_output.reasoning.lower()
+    # The actual message is "LLM response failed schema validation (3 errors). Routed to human review. Raw response stored for debugging."
+    assert "schema validation" in result.triage_output.reasoning.lower()
 
 
 # ---------------------------------------------------------------------------

@@ -82,18 +82,19 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 # Table initialisation — called at app startup (not for production migrations)
 # ---------------------------------------------------------------------------
 
+from sqlalchemy import text
+
 async def init_db() -> None:
     """
-    Create all tables if they don't exist.
-    For production use Alembic migrations instead of create_all.
-    This is intentionally left as a convenience for local dev + CI.
+    Verify database connection.
+    For production, schema changes must be handled by Alembic migrations.
     """
     try:
         async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        logger.info("Database tables initialised")
+            await conn.execute(text("SELECT 1"))
+        logger.info("Database connection verified")
     except SQLAlchemyError as exc:
-        logger.critical("Failed to initialise database tables: {}", exc)
+        logger.critical("Failed to verify database connection: {}", exc)
         raise
 
 

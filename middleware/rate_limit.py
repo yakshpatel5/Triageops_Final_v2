@@ -104,8 +104,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         minute_bucket = int(time.time() // 60)
         client_ip = request.client.host if request.client else "unknown"
 
-        # Tenant-level limit (post-auth — tenant_id may not be set yet on first pass)
+        # Tenant-level limit
+        # Note: APIKeyMiddleware runs BEFORE RateLimitMiddleware in main.py,
+        # so request.state.tenant_id should be available for authenticated routes.
         tenant_id = getattr(request.state, "tenant_id", None)
+        
+        # If tenant_id is not set but it's a webhook/ops path, it might be an unauth request
+        # that will be caught by APIKeyMiddleware later, but we can still rate limit by IP.
+        
         if tenant_id:
             key = f"rl:{endpoint_class}:{tenant_id}:{minute_bucket}"
             allowed, count = await _check_rate_limit(key, limit)
@@ -116,7 +122,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 )
                 return JSONResponse(
                     status_code=429,
-                    content={"detail": f"Rate limit exceeded: {limit} req/min"},
+                    content={"detail": f"Rate limit exceeded for {endpoint_class}: {limit} req/min"},
                     headers={"Retry-After": "60"},
                 )
 

@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.session import get_db
 from models import Alert, AlertEnrichment, EscalationEvent, SlackApproval
+from pydantic import BaseModel
 from routers.ops_schemas import (
     AlertDetail,
     AlertSummary,
@@ -48,6 +49,9 @@ from routers.ops_schemas import (
 )
 
 router = APIRouter(prefix="/ops", tags=["ops"])
+
+class LoginRequest(BaseModel):
+    api_key: str
 
 # Max page_size cap — prevents runaway queries
 _MAX_PAGE_SIZE = 100
@@ -67,6 +71,57 @@ def get_tenant(request: Request) -> str:
 
 TenantDep = Annotated[str, Depends(get_tenant)]
 DBDep = Annotated[AsyncSession, Depends(get_db)]
+
+
+# ---------------------------------------------------------------------------
+# Auth: Login / Logout (Cookie-based)
+# ---------------------------------------------------------------------------
+
+@router.post("/auth/login")
+async def login(
+    request: LoginRequest,
+    session: DBDep,
+) -> dict:
+    """
+    Verify API key and set an httpOnly cookie for the frontend.
+    This protects the key from XSS.
+    """
+    from middleware.auth import _resolve_tenant
+    
+    tenant_id = await _resolve_tenant(request.api_key, session)
+    if not tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API key"
+        )
+    
+    response = JSONResponse(content={"status": "ok", "tenant_id": tenant_id})
+    
+    # Set httpOnly cookie
+    # In production, secure=True is required
+    response.set_cookie(
+        key="triageops_session",
+        value=request.api_key,
+        httponly=True,
+        secure=os.getenv("APP_ENV") == "production",
+        samesite="lax",
+        max_age=86400 * 7,  # 7 days
+    )
+    return response
+
+
+@router.post("/auth/logout")
+async def logout() -> dict:
+    """Clear the session cookie."""
+    response = JSONResponse(content={"status": "ok"})
+    response.delete_cookie("triageops_session")
+    return response
+
+
+@router.get("/auth/verify")
+async def verify_auth(tenant_id: TenantDep) -> dict:
+    """Check if the current session/key is valid."""
+    return {"status": "ok", "tenant_id": tenant_id}
 
 
 # ---------------------------------------------------------------------------

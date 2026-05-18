@@ -48,7 +48,8 @@ def _trunc(s: str | None, limit: int = 200) -> str:
     if not s:
         return ""
     s = str(s).strip()
-    return s[:limit - 3] + "…" if len(s) > limit else s
+    # Use limit - 1 because '…' is a single unicode character
+    return s[:limit - 1] + "…" if len(s) > limit else s
 
 
 def _conf_bar(score: str | None) -> str:
@@ -108,9 +109,7 @@ def build_teams_card(
     triage_facts = [
         {"name": "Decision",    "value": decision},
         {"name": "Confidence",  "value": _conf_bar(enrichment.confidence_score)},
-        {"name": "Category",    "value": enrichment.llm_reasoning[:120] + "…"
-                                          if enrichment.llm_reasoning and len(enrichment.llm_reasoning) > 120
-                                          else (enrichment.llm_reasoning or "—")},
+        {"name": "Reasoning",   "value": _trunc(enrichment.llm_reasoning, 150)},
     ]
     sections.append({
         "title":   "🤖 AI Triage Analysis",

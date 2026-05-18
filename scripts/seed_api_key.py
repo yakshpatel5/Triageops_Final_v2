@@ -10,7 +10,7 @@ Prints the raw API key (only shown once). Store it in your secrets manager.
 """
 
 import asyncio
-import hashlib
+import bcrypt
 import os
 import secrets
 import sys
@@ -24,7 +24,7 @@ from models import ApiKey
 
 
 def _hash_key(raw: str) -> str:
-    return hashlib.sha256(raw.encode()).hexdigest()
+    return bcrypt.hashpw(raw.encode(), bcrypt.gensalt(rounds=12)).decode()
 
 
 async def create_key(tenant_id: str, description: str) -> str:

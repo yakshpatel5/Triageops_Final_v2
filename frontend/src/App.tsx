@@ -8,9 +8,9 @@ import { motion, AnimatePresence } from 'motion/react';
 import type { View } from './types';
 
 // ── API helpers ───────────────────────────────────────────────────────────
-const API_KEY = sessionStorage.getItem('to_key') ?? '';
+// Note: API_KEY is now handled via httpOnly cookies for security.
+// The browser automatically sends the cookie with every request.
 const H = () => ({
-  'X-API-Key': sessionStorage.getItem('to_key') ?? '',
   'Content-Type': 'application/json',
 });
 
@@ -86,9 +86,18 @@ function LoginScreen({ onLogin }: { onLogin:(key:string)=>void }) {
     if (!key.trim()) { setErr('Enter your API key.'); return; }
     setLoading(true); setErr('');
     try {
-      const r = await fetch('/ops/auth/verify', { headers: { 'X-API-Key': key } });
+      // Use the new login endpoint which sets an httpOnly cookie
+      const r = await fetch('/ops/auth/login', { 
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_key: key })
+      });
+      
       if (!r.ok) throw new Error('Invalid API key');
-      sessionStorage.setItem('to_key', key);
+      
+      // We still use a flag in localStorage/sessionStorage just to know we are "logged in"
+      // but the actual secret is in the httpOnly cookie.
+      sessionStorage.setItem('to_logged_in', 'true');
       onLogin(key);
     } catch (e: any) {
       setErr(e.message || 'Login failed');
@@ -128,11 +137,21 @@ function LoginScreen({ onLogin }: { onLogin:(key:string)=>void }) {
 
 // ── Root ──────────────────────────────────────────────────────────────────
 export default function App() {
-  const [apiKey, setApiKey] = useState(sessionStorage.getItem('to_key') ?? '');
+  const [isLoggedIn, setIsLoggedIn] = useState(sessionStorage.getItem('to_logged_in') === 'true');
   const [activeView, setActiveView] = useState<View>('dashboard');
   const nav = (v:View) => setActiveView(v);
 
-  if (!apiKey) return <LoginScreen onLogin={k=>setApiKey(k)} />;
+  const handleLogout = async () => {
+    try {
+      await fetch('/ops/auth/logout', { method: 'POST' });
+    } catch (e) {
+      console.error('Logout failed', e);
+    }
+    sessionStorage.clear();
+    setIsLoggedIn(false);
+  };
+
+  if (!isLoggedIn) return <LoginScreen onLogin={() => setIsLoggedIn(true)} />;
 
   return (
     <div style={{ background:T.bg, minHeight:'100vh', fontFamily:'Manrope, system-ui, sans-serif', color:T.ink }}>
@@ -153,7 +172,7 @@ export default function App() {
             <input placeholder="Search…" style={{ background:'#fff', border:`1px solid ${T.border}`, borderRadius:9999, padding:'7px 16px 7px 32px', fontSize:13, outline:'none', width:180, color:T.ink }} />
           </div>
           <div style={{ width:34, height:34, borderRadius:'50%', background:T.teal, display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontWeight:700, fontSize:13 }}>N</div>
-          <button onClick={()=>{sessionStorage.clear();setApiKey('');}} style={{ background:'none', border:`1px solid ${T.border}`, borderRadius:9999, padding:'7px 14px', fontSize:12, color:T.sub, cursor:'pointer' }}>Sign out</button>
+          <button onClick={handleLogout} style={{ background:'none', border:`1px solid ${T.border}`, borderRadius:9999, padding:'7px 14px', fontSize:12, color:T.sub, cursor:'pointer' }}>Sign out</button>
         </div>
       </header>
 

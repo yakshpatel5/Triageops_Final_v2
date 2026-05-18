@@ -18,15 +18,18 @@ from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import contextmanager
 
 import sentry_sdk
 from celery import Celery
 from celery.schedules import crontab
+from celery.signals import worker_process_init
 from celery.utils.log import get_task_logger
 from loguru import logger
 
 from llm.client import LLMError
 from llm.pipeline import AlertNotFound, run_enrichment_pipeline
+from metrics.instrumentation import get_queue_depth
 from slack.notifier import send_alert_notification
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
@@ -44,6 +47,7 @@ celery_app.conf.update(
     accept_content=["json"],
     timezone="UTC",
     enable_utc=True,
+    result_expires=3600,  # Expire results after 1 hour to save Redis memory
     task_acks_late=True,
     task_reject_on_worker_lost=True,
     worker_prefetch_multiplier=1,
@@ -70,6 +74,31 @@ celery_app.conf.update(
 
 _task_logger = get_task_logger(__name__)
 
+# ---------------------------------------------------------------------------
+# Asyncio Worker Setup
+# ---------------------------------------------------------------------------
+
+_worker_loop: asyncio.AbstractEventLoop | None = None
+
+@worker_process_init.connect
+def init_worker_process(**kwargs):
+    """
+    Initialize a single event loop per worker process.
+    This allows sharing connection pools across tasks in the same process.
+    """
+    global _worker_loop
+    _worker_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(_worker_loop)
+    logger.info("Celery worker process initialized with shared event loop")
+
+
+def run_async(coro):
+    """Helper to run coroutines in the worker's shared event loop."""
+    if _worker_loop is None:
+        # Fallback for local testing or if signal didn't fire
+        return asyncio.run(coro)
+    return _worker_loop.run_until_complete(coro)
+
 
 # ---------------------------------------------------------------------------
 # Task: LLM enrichment + Slack notification
@@ -86,6 +115,15 @@ def enrich_alert(self, db_alert_id: str, tenant_id: str) -> dict:
     Full pipeline: LLM enrichment → Slack notification.
     Celery retries on transient LLM errors with exponential backoff.
     """
+    # Update queue depth metric
+    try:
+        with celery_app.connection_or_acquire() as conn:
+            # This is a rough estimate of the queue depth for Redis
+            count = conn.default_channel.client.llen("enrichment")
+            get_queue_depth().set(count)
+    except Exception:
+        pass
+
     logger.info(
         "Task enrich_alert start | db_id={} tenant={} attempt={}/{}",
         db_alert_id, tenant_id,
@@ -94,7 +132,7 @@ def enrich_alert(self, db_alert_id: str, tenant_id: str) -> dict:
 
     # Stage 1: LLM enrichment
     try:
-        result = asyncio.run(
+        result = run_async(
             run_enrichment_pipeline(db_alert_id=db_alert_id, tenant_id=tenant_id)
         )
     except AlertNotFound as exc:
@@ -124,7 +162,7 @@ def enrich_alert(self, db_alert_id: str, tenant_id: str) -> dict:
 
     # Stage 2: Slack notification (non-fatal)
     try:
-        slack_ts = asyncio.run(
+        slack_ts = run_async(
             send_alert_notification(db_alert_id=db_alert_id, tenant_id=tenant_id)
         )
         if not slack_ts:
@@ -146,6 +184,37 @@ def enrich_alert(self, db_alert_id: str, tenant_id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Distributed Lock for Beat Singleton Tasks
+# ---------------------------------------------------------------------------
+
+@contextmanager
+def distributed_lock(lock_name: str, expire_secs: int = 60):
+    """
+    Redis-backed distributed lock to ensure only one Beat task runs at a time.
+    Prevents double-execution during rolling deployments.
+    """
+    import redis
+    url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+    r = redis.from_url(url, decode_responses=True)
+    
+    lock_key = f"lock:beat:{lock_name}"
+    
+    # SET NX EX: Set if Not eXists with EXpiry
+    acquired = r.set(lock_key, "locked", ex=expire_secs, nx=True)
+    
+    if not acquired:
+        logger.warning("Could not acquire distributed lock | key={}", lock_key)
+        yield False
+        return
+
+    try:
+        yield True
+    finally:
+        # Only delete if we still own it (basic safety)
+        r.delete(lock_key)
+
+
+# ---------------------------------------------------------------------------
 # Cron task: expire stale approvals
 # ---------------------------------------------------------------------------
 
@@ -156,16 +225,20 @@ def enrich_alert(self, db_alert_id: str, tenant_id: str) -> dict:
 )
 def expire_stale_approvals() -> dict:
     """Mark PENDING approvals past TTL as EXPIRED. Runs every 15 minutes."""
-    from cron import _run_expire_stale_approvals
-    logger.info("Cron: expire_stale_approvals start")
-    try:
-        result = asyncio.run(_run_expire_stale_approvals())
-        logger.info("Cron: expire_stale_approvals complete | {}", result)
-        return result
-    except Exception as exc:
-        sentry_sdk.capture_exception(exc)
-        logger.exception("Cron: expire_stale_approvals failed | error={}", exc)
-        return {"status": "error", "error": str(exc)}
+    with distributed_lock("expire_stale_approvals", expire_secs=300) as acquired:
+        if not acquired:
+            return {"status": "skipped", "reason": "lock_not_acquired"}
+
+        from cron import _run_expire_stale_approvals
+        logger.info("Cron: expire_stale_approvals start")
+        try:
+            result = run_async(_run_expire_stale_approvals())
+            logger.info("Cron: expire_stale_approvals complete | {}", result)
+            return result
+        except Exception as exc:
+            sentry_sdk.capture_exception(exc)
+            logger.exception("Cron: expire_stale_approvals failed | error={}", exc)
+            return {"status": "error", "error": str(exc)}
 
 
 # ---------------------------------------------------------------------------
@@ -179,16 +252,20 @@ def expire_stale_approvals() -> dict:
 )
 def escalate_unactioned_criticals() -> dict:
     """Auto-escalate CRITICAL alerts that expired without human action. Runs every 5 minutes."""
-    from cron import _run_escalate_unactioned_criticals
-    logger.info("Cron: escalate_unactioned_criticals start")
-    try:
-        result = asyncio.run(_run_escalate_unactioned_criticals())
-        logger.info("Cron: escalate_unactioned_criticals complete | {}", result)
-        return result
-    except Exception as exc:
-        sentry_sdk.capture_exception(exc)
-        logger.exception("Cron: escalate_unactioned_criticals failed | error={}", exc)
-        return {"status": "error", "error": str(exc)}
+    with distributed_lock("escalate_unactioned_criticals", expire_secs=120) as acquired:
+        if not acquired:
+            return {"status": "skipped", "reason": "lock_not_acquired"}
+
+        from cron import _run_escalate_unactioned_criticals
+        logger.info("Cron: escalate_unactioned_criticals start")
+        try:
+            result = run_async(_run_escalate_unactioned_criticals())
+            logger.info("Cron: escalate_unactioned_criticals complete | {}", result)
+            return result
+        except Exception as exc:
+            sentry_sdk.capture_exception(exc)
+            logger.exception("Cron: escalate_unactioned_criticals failed | error={}", exc)
+            return {"status": "error", "error": str(exc)}
 
 
 # ---------------------------------------------------------------------------
@@ -251,7 +328,7 @@ def dispatch_escalation_for_approval(self, approval_id: str) -> dict:
         return {"status": event.status, "provider": event.provider}
 
     try:
-        return asyncio.run(_run())
+        return run_async(_run())
     except Exception as exc:
         sentry_sdk.capture_exception(exc)
         logger.exception(

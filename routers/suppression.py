@@ -248,12 +248,14 @@ async def update_rule(
 # DELETE /ops/suppression/{rule_id}
 # ---------------------------------------------------------------------------
 
-@router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
+from fastapi import Response
+
+@router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
 async def delete_rule(
     rule_id: uuid.UUID,
     tenant_id: TenantDep,
     session: DBDep,
-) -> None:
+):
     rule = await _require_rule(rule_id, tenant_id, session)
     await session.delete(rule)
     await _invalidate_cache(tenant_id)

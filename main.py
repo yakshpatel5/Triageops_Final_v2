@@ -20,9 +20,23 @@ from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from db.session import close_db, init_db
-from middleware.auth import APIKeyMiddleware
-from middleware.rate_limit import RateLimitMiddleware
 from middleware.request_id import RequestIDMiddleware
+from middleware.rate_limit import RateLimitMiddleware
+from metrics.instrumentation import get_metrics_app
+from middleware.request_id import RequestIDMiddleware
+from middleware.auth import APIKeyMiddleware
+
+
+class RequestLogMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        logger.info(
+            "{} {} {} | tenant={} rid={}",
+            request.method, request.url.path, response.status_code,
+            getattr(request.state, "tenant_id", "-"),
+            getattr(request.state, "request_id", "-"),
+        )
+        return response
 
 
 def _configure_logging() -> None:
@@ -113,17 +127,6 @@ def create_app() -> FastAPI:
     if os.getenv("RATE_LIMITING_ENABLED", "true").lower() == "true":
         app.add_middleware(RateLimitMiddleware)
 
-    class RequestLogMiddleware(BaseHTTPMiddleware):
-        async def dispatch(self, request: Request, call_next):
-            response = await call_next(request)
-            logger.info(
-                "{} {} {} | tenant={} rid={}",
-                request.method, request.url.path, response.status_code,
-                getattr(request.state, "tenant_id", "-"),
-                getattr(request.state, "request_id", "-"),
-            )
-            return response
-
     app.add_middleware(RequestLogMiddleware)
 
     @app.exception_handler(Exception)
@@ -162,11 +165,7 @@ def create_app() -> FastAPI:
     async def health() -> dict:
         return {"status": "ok", "version": os.getenv("APP_VERSION", "dev")}
     
-    @app.get("/metrics", tags=["ops"], include_in_schema=False,
-             response_class=PlainTextResponse)
-    async def metrics() -> str:
-        # V1.2: wire prometheus-client counters
-        return "# HELP triageops_up Service health\n# TYPE triageops_up gauge\ntriageops_up 1\n"
+    app.mount("/metrics", get_metrics_app())
     
     def custom_openapi():
         if app.openapi_schema:
@@ -189,4 +188,5 @@ def create_app() -> FastAPI:
     return app
 
 
-app = create_app()
+if __name__ == "__main__":
+    app = create_app()

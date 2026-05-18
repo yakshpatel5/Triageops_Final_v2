@@ -243,12 +243,15 @@ class TestCheckSuppression:
     @pytest.mark.asyncio
     async def test_returns_rule_on_match(self):
         from suppression.engine import check_suppression
-        matching_rule = {
-            "id": str(uuid.uuid4()), "tenant_id": "acme",
-            "match_field": "HOST", "pattern_type": "EXACT",
-            "host_pattern": "srv-prod-01", "message_pattern": None,
-            "alert_id_prefix": None, "is_active": "1", "expires_at": None,
-        }
+        from models import SuppressionRule
+        matching_rule = SuppressionRule(
+            id=uuid.uuid4(),
+            tenant_id="acme",
+            match_field="HOST",
+            pattern_type="EXACT",
+            host_pattern="srv-prod-01",
+            is_active="1"
+        )
         session = AsyncMock()
         with patch("suppression.engine._load_rules", new=AsyncMock(return_value=[matching_rule])):
             with patch("suppression.engine._record_hit", new=AsyncMock()):
@@ -273,20 +276,26 @@ class TestCheckSuppression:
 class TestSuppressionAPI:
 
     def _make_client(self, session):
+        from contextlib import contextmanager
         from main import create_app
         from middleware.auth import APIKeyMiddleware
         from db.session import get_db
-        app = create_app()
-        async def _auth(self, req, call_next):
-            req.state.tenant_id = "acme"
-            return await call_next(req)
-        async def _db():
-            yield session
-        with patch.object(APIKeyMiddleware, "dispatch", _auth):
-            app.dependency_overrides[get_db] = _db
-            from fastapi.testclient import TestClient
-            yield TestClient(app)
-            app.dependency_overrides.clear()
+        from fastapi.testclient import TestClient
+
+        @contextmanager
+        def _client():
+            app = create_app()
+            async def _auth(self, req, call_next):
+                req.state.tenant_id = "acme"
+                return await call_next(req)
+            async def _db():
+                yield session
+            with patch.object(APIKeyMiddleware, "dispatch", _auth):
+                app.dependency_overrides[get_db] = _db
+                with TestClient(app) as c:
+                    yield c
+                app.dependency_overrides.clear()
+        return _client()
 
     def test_list_rules_empty(self):
         session = AsyncMock()

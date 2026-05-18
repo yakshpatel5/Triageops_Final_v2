@@ -20,6 +20,43 @@ os.environ.setdefault("SENTRY_DSN",        "")
 
 
 @pytest.fixture(autouse=True)
+def clear_prometheus_registry():
+    from prometheus_client import REGISTRY
+    collectors = list(REGISTRY._collector_to_names.keys())
+    for collector in collectors:
+        try:
+            REGISTRY.unregister(collector)
+        except (KeyError, ValueError):
+            pass
+    yield
+
+@pytest.fixture(autouse=True)
+def mock_metrics():
+    """Patch metrics functions to return MagicMocks and avoid Prometheus registry issues in tests."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+    
+    # Create a mock that behaves like a metric (supports .labels().inc(), etc.)
+    mock_metric = MagicMock()
+    mock_metric.labels.return_value = mock_metric
+    
+    with patch("metrics.instrumentation.get_alerts_total", return_value=mock_metric), \
+         patch("metrics.instrumentation.get_enrichment_duration", return_value=mock_metric), \
+         patch("metrics.instrumentation.get_enrichment_errors_total", return_value=mock_metric), \
+         patch("metrics.instrumentation.get_queue_depth", return_value=mock_metric), \
+         patch("metrics.instrumentation.get_circuit_breaker_state", return_value=mock_metric), \
+         patch("metrics.instrumentation.get_metrics_app", return_value=MagicMock()), \
+         patch("main.get_metrics_app", return_value=MagicMock()), \
+         patch("db.session.init_db", new=AsyncMock()), \
+         patch("db.session.close_db", new=AsyncMock()), \
+         patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=MagicMock()), \
+         patch("db.session.engine", new=MagicMock()), \
+         patch("db.session.AsyncSessionLocal", new=MagicMock()), \
+         patch("db.session.engine.begin", new=AsyncMock(return_value=AsyncMock())), \
+         patch("db.session.engine.dispose", new=AsyncMock()), \
+         patch("prometheus_client.REGISTRY", new=MagicMock()):
+        yield
+
+@pytest.fixture(autouse=True)
 def no_sentry(monkeypatch):
     """Prevent Sentry from capturing anything during tests."""
     import sentry_sdk

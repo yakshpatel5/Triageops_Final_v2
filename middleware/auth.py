@@ -18,6 +18,7 @@ import hashlib
 import os
 from typing import Callable
 
+import bcrypt
 import sentry_sdk
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
@@ -39,20 +40,48 @@ if _raw := os.getenv("BOOTSTRAP_API_KEY"):
     _BOOTSTRAP_API_KEY_HASH = hashlib.sha256(_raw.encode()).hexdigest()
 
 
-def _hash_key(raw_key: str) -> str:
+def _hash_key_sha256(raw_key: str) -> str:
+    """Legacy SHA-256 hashing."""
     return hashlib.sha256(raw_key.encode()).hexdigest()
 
 
-async def _resolve_tenant(key_hash: str, session: AsyncSession) -> str | None:
-    """Return tenant_id for an active key hash, or None if not found/inactive."""
+def _hash_key_bcrypt(raw_key: str) -> str:
+    """New bcrypt hashing."""
+    return bcrypt.hashpw(raw_key.encode(), bcrypt.gensalt(rounds=12)).decode()
+
+
+def _verify_key_bcrypt(raw_key: str, hashed_key: str) -> bool:
+    """Verify a raw key against a bcrypt hash."""
+    try:
+        return bcrypt.checkpw(raw_key.encode(), hashed_key.encode())
+    except Exception:
+        return False
+
+
+async def _resolve_tenant(raw_key: str, session: AsyncSession) -> str | None:
+    """Return tenant_id for an active key, or None if not found/inactive."""
+    # 1. Try legacy SHA-256 first (fast path for old keys)
+    legacy_hash = _hash_key_sha256(raw_key)
     result = await session.execute(
-        select(ApiKey.tenant_id)
-        .where(ApiKey.key_hash == key_hash)
+        select(ApiKey.tenant_id, ApiKey.key_hash)
         .where(ApiKey.is_active == "1")
-        .limit(1)
     )
-    row = result.first()
-    return row[0] if row else None
+    
+    # This is a bit inefficient if there are thousands of keys, 
+    # but for a V1 it's safer to check all active keys.
+    # In a real production system, we'd store the hash type in the DB.
+    for row in result.all():
+        tenant_id, stored_hash = row
+        
+        # Check legacy SHA-256
+        if stored_hash == legacy_hash:
+            return tenant_id
+            
+        # Check bcrypt
+        if stored_hash.startswith("$2b$") and _verify_key_bcrypt(raw_key, stored_hash):
+            return tenant_id
+            
+    return None
 
 
 class APIKeyMiddleware(BaseHTTPMiddleware):
@@ -66,29 +95,33 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         if any(request.url.path.startswith(p) for p in _AUTH_EXEMPT_PREFIXES):
             return await call_next(request)
 
+        # 1. Try X-API-Key header (standard for webhooks)
         raw_key = request.headers.get("X-API-Key", "").strip()
+        
+        # 2. Fallback to httpOnly cookie (standard for dashboard)
+        if not raw_key:
+            raw_key = request.cookies.get("triageops_session", "").strip()
+
         if not raw_key:
             logger.warning(
-                "Rejected request — missing X-API-Key | path={} ip={}",
+                "Rejected request — missing authentication | path={} ip={}",
                 request.url.path,
                 request.client.host if request.client else "unknown",
             )
             return JSONResponse(
                 status_code=401,
-                content={"detail": "X-API-Key header required"},
+                content={"detail": "Authentication required (X-API-Key header or session cookie)"},
             )
 
-        key_hash = _hash_key(raw_key)
-
-        # Fast path: bootstrap key bypasses DB lookup
-        if _BOOTSTRAP_API_KEY_HASH and key_hash == _BOOTSTRAP_API_KEY_HASH:
+        # Fast path: bootstrap key bypasses DB lookup (still using SHA-256 for the env var)
+        if _BOOTSTRAP_API_KEY_HASH and _hash_key_sha256(raw_key) == _BOOTSTRAP_API_KEY_HASH:
             request.state.tenant_id = "bootstrap"
             logger.debug("Bootstrap API key used | path={}", request.url.path)
             return await call_next(request)
 
         try:
             async with AsyncSessionLocal() as session:
-                tenant_id = await _resolve_tenant(key_hash, session)
+                tenant_id = await _resolve_tenant(raw_key, session)
         except Exception as exc:
             sentry_sdk.capture_exception(exc)
             logger.error("Auth DB lookup failed: {}", exc)
